@@ -1,0 +1,233 @@
+package carRentalPack
+import java.util.Date;
+import carRentalPack.Car;
+import carRentalPack.Client;
+import carRentalPack.CarCategory;
+import carRentalPack.Rent;
+import carRentalPack.Return;
+import carRentalPack.PriceList;
+
+rule "initialization"
+	when
+	then
+    	PriceList pList = new PriceList(10, 10, 20, 500, 3, 1.0, 0.5);
+		insert(pList);
+		
+		CarCategory A = new CarCategory('A', 'B', 59, 69);
+		CarCategory B = new CarCategory('B', 'D', 69, 79);
+		CarCategory D = new CarCategory('D', '?', 79, 89);
+		insert(A);
+		insert(B);
+		insert(D);
+		
+		Car car1 = new Car("Samochód1", 'A');
+		Car car2 = new Car("Samochód2", 'A');
+		Car car3 = new Car("Samochód3", 'B');
+		Car car4 = new Car("Samochód4", 'D');
+		Car car5 = new Car("Samochód5", 'D');
+		insert(car1);
+		insert(car2);
+		insert(car3);
+		insert(car4);
+		insert(car5);
+		
+		Client client1 = new Client("Klient1", 1);
+		Rent rent1 = new Rent(client1, '11/11/2016', '12/11/2016', '?', 1, 1);
+		Return return1 = new Return(rent1, '12/11/2016', 0, 0, 66);
+		insert(client1);
+		insert(rent1);
+		insert(return1);
+		
+		Client client2 = new Client("Klient2", 0);
+		Rent rent2 = new Rent(client2, '10/11/2016', '13/11/2016', 'B', 0, 1);
+		Rent rent3 = new Rent(client2, '11/11/2016', '14/11/2016', 'A', 0, 1);
+		Return return2 = new Return(rent2, '13/11/2016', 0, 0, 100);
+		insert(client2);
+		insert(rent2);
+		insert(rent3);
+		insert(return2);
+
+		Client client3 = new Client("Klient3", 0);
+		Rent rent4 = new Rent(client3, '11/11/2016', '16/11/2016', 'B', 0, 0);
+		Return return4 = new Return(rent4, '18/11/2016', 2, 1, 1000);
+		insert(client3);
+		insert(rent4);
+		insert(return4);
+end
+
+rule "client_cannot_have_multiple_rents_in_same_period"
+	when
+		r: Rent()
+		r2: Rent( client.name == r.client.name , ((r.rentalDate > r2.rentalDate && r2.plannedReturnDate > r.rentalDate)||(r.rentalDate < r2.rentalDate && r.plannedReturnDate > r2.rentalDate)||(r.rentalDate == r2.rentalDate)))
+		eval( r != r2)
+	then
+		retract(r);
+		System.out.println("\n" + r.getClient().getName() + " nie mo¿e wypo¿yczyæ kolejnego samochodu w tym samym terminie!");
+end
+
+rule "client_cannot_have_undefined_pref_car_category"
+	when
+		r: Rent(prefCarCategory == '?')
+	then
+		r.setPrefCarCategory('A');
+		update(r);
+end
+
+rule "renting_a_free_car_and_dates_dont_overlap"
+	when
+		r: Rent( car == null )
+		c: Car( category == r.prefCarCategory )
+		not( exists( r2: Rent( car != null, car.name == c.name, ((r.rentalDate > r2.rentalDate && r2.plannedReturnDate > r.rentalDate)||(r.rentalDate < r2.rentalDate && r.plannedReturnDate > r2.rentalDate)||(r.rentalDate == r2.rentalDate)) ) ) )
+	then
+		r.setCar(c);
+		update(r);
+end
+
+rule "renting_a_free_car_in_higher_category_and_dates_dont_overlap"
+	when
+		r: Rent( car == null )
+		cc: CarCategory ( name == r.prefCarCategory )
+		c: Car( category == cc.nextCategory )
+		not( exists( r2: Rent( car != null, car.name == c.name, ((r.rentalDate > r2.rentalDate && r2.plannedReturnDate > r.rentalDate)||(r.rentalDate < r2.rentalDate && r.plannedReturnDate > r2.rentalDate)||(r.rentalDate == r2.rentalDate)) ) ) )
+	then
+		r.setCar(c);
+		update(r);
+end
+
+rule "defining_rental_days"
+	when
+		r: Rent()
+	then
+		r.setRentalDays((int)(r.getPlannedReturnDate().getTime() - r.getRentalDate().getTime())/1000/60/60/24+1);
+		update(r);
+end
+
+rule "defining_car_cost_per_day_1-3_days"
+	when
+		r: Rent( rentalDays <= 3)
+		cc: CarCategory( name == r.prefCarCategory )
+	then
+		r.setCarCostPerDay(cc.getSecondPrice());
+		update(r);
+end
+
+rule "defining_car_cost_per_day_4_and_more_days"
+	when
+		r: Rent( rentalDays > 3)
+		cc: CarCategory( name == r.prefCarCategory )
+	then
+		r.setCarCostPerDay(cc.getFirstPrice());
+		update(r);
+end
+
+rule "defining_equipment_cost"
+	when
+		pl: PriceList()
+		r: Rent()
+	then
+		r.setEquipTotalCost((r.getCarSeat()*pl.getCarSeatCost()+r.getBicyclesRack()*pl.getBicyclesRackCost()));
+		update(r)
+end
+
+rule "reducing_equipment_cost_due_to_loyalty_program"
+	when
+		pl: PriceList()
+		r: Rent( client.loyaltyProgram == 1, carSeat == 1 || bicyclesRack == 1 )
+	then
+		r.setEquipTotalCost(r.getEquipTotalCost()-pl.getCarSeatCost());
+		update(r)
+end
+
+rule "defining_total_rental_cost"
+	when
+		r: Rent()
+	then
+		r.setRentalTotalCost(r.getRentalDays()*r.getCarCostPerDay()+r.getEquipTotalCost());
+		update(r)
+end
+		
+rule "defining_kmCost_1-3_days"
+	when
+		pl: PriceList()
+		r: Return()
+		eval(r.getRent().getRentalDays() <= 3)
+	then
+		r.setKmCost(pl.getKmCost1());
+		update(r);
+end
+
+rule "defining_kmCost_4_and_more_days"
+	when
+		pl: PriceList()
+		r: Return()
+		eval(r.getRent().getRentalDays() > 3)
+	then
+		r.setKmCost(pl.getKmCost2());
+		update(r);
+end
+
+rule "defining_distanceTotalCost"
+	when
+		r: Return()
+	then
+		r.setDistanceTotalCost(r.getKmCost()*r.getDistanceTravelled());
+		update(r);
+end
+
+rule "defining_days_late"
+	when
+		r: Return( returnDate.getTime() > rent.plannedReturnDate.getTime() )
+	then
+		r.setDaysLateNum((int)(r.getReturnDate().getTime() - r.getRent().getPlannedReturnDate().getTime())/1000/60/60/24);
+		update(r);
+end
+
+rule "defining_delay"
+	when
+		pl: PriceList()
+		r: Return()
+	then
+		r.setDelayTotalCost(r.getDaysLateNum()*pl.getPenaltyFactorPerDay()*r.getRent().getCarCostPerDay());
+		update(r);
+end
+
+rule "defining_total_return_cost"
+	when
+		pl: PriceList()
+		r: Return()
+	then
+		r.setReturnTotalCost(r.getDistanceTotalCost()+r.getLostHubcupsNum()*pl.getLostHubcupCost()+r.getLostVehicleRegCert()*pl.getLostVehicleRegCertCost()+r.getDelayTotalCost());
+		update(r)
+end
+
+rule "Setting_Total_Sum"
+	when
+		r: Return()
+	then
+		r.setTotalSum(r.getRent().getRentalTotalCost()+r.getReturnTotalCost());
+		update(r);
+end
+
+rule "return_a_car"
+	when
+		r: Return()
+		pl: PriceList()
+	then
+		System.out.println();
+		System.out.println(r.getRent().getClient().getName());
+		System.out.println("-----------------------------");
+		int days = r.getRent().getRentalDays();
+		int carCostPerDay = r.getRent().getCarCostPerDay();
+		System.out.println(days + " dni: " + days + "*" + carCostPerDay + " = " + days*carCostPerDay);
+		System.out.println("wyposa¿enie: " + r.getRent().getEquipTotalCost());
+		System.out.println("SUMA wypo¿yczenie: " + r.getRent().getRentalTotalCost());
+		System.out.println("-----------------------------");
+		System.out.println(r.getDistanceTravelled() + " km: " + r.getDistanceTotalCost());
+		System.out.println(r.getLostHubcupsNum() + " ko³paki: " + r.getLostHubcupsNum()*pl.getLostHubcupCost());
+		System.out.println("ubezpieczenie: " + r.getLostVehicleRegCert()*pl.getLostVehicleRegCertCost());
+		System.out.println("opóŸnienie: " + r.getDelayTotalCost());
+		System.out.println("SUMA oddanie: " + r.getReturnTotalCost());
+		System.out.println("-----------------------------");
+		System.out.println("SUMA CA£KOWITA: " + r.getTotalSum());
+		System.out.println("_____________________________");
+end
